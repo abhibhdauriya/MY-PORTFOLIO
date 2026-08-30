@@ -23,8 +23,7 @@ CUSTOM_CSS = """
     }
 
     .stApp { background-color: var(--bg-primary); }
-    #MainMenu, footer { visibility: hidden; }
-header [data-testid="stToolbar"] { visibility: hidden; }
+    #MainMenu, footer, header { visibility: hidden; }
 
     .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1100px; }
 
