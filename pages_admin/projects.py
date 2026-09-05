@@ -6,6 +6,11 @@ from utils.validators import is_valid_url, required_field_ok
 from utils.helpers import PROJECT_CATEGORIES, PROJECT_STATUSES
 
 
+def _show_flash():
+    if st.session_state.get("_project_flash"):
+        st.success(st.session_state.pop("_project_flash"))
+
+
 def project_form(existing: dict | None = None):
     is_edit = existing is not None
     key_prefix = f"edit_{existing['id']}" if is_edit else "new"
@@ -102,9 +107,7 @@ def project_form(existing: dict | None = None):
                 "excel_version": excel_version, "uses_vba": int(uses_vba),
                 "uses_python": int(uses_python), "uses_power_query": int(uses_power_query),
                 "uses_power_pivot": int(uses_power_pivot),
-                "updated_at": "CURRENT_TIMESTAMP_PLACEHOLDER",
             }
-            data.pop("updated_at")  # handled below via raw SQL default; keep insert/update simple
 
             if thumbnail:
                 path = save_uploaded_file(thumbnail, "projects")
@@ -126,18 +129,20 @@ def project_form(existing: dict | None = None):
                 if path:
                     data["pdf_doc_path"] = path
 
-            if is_edit:
-                update_row("projects", existing["id"], data)
-                st.success("Project updated.")
-            else:
-                insert_row("projects", data)
-                st.success("Project created.")
+            with st.spinner("Saving..."):
+                if is_edit:
+                    update_row("projects", existing["id"], data)
+                    st.session_state["_project_flash"] = "Project updated successfully."
+                else:
+                    insert_row("projects", data)
+                    st.session_state["_project_flash"] = "Project created successfully."
             st.rerun()
 
 
 def render():
     require_login()
     st.markdown('<div class="hero-title" style="font-size:1.8rem;">Manage Projects</div>', unsafe_allow_html=True)
+    _show_flash()
 
     tab_add, tab_manage = st.tabs(["➕ Add Project", "📋 All Projects"])
 
@@ -166,11 +171,12 @@ def render():
                         for shot in (p.get("screenshots") or "").split(","):
                             delete_file(shot.strip())
                         delete_row("projects", p["id"])
-                        st.success("Deleted.")
+                        st.session_state["_project_flash"] = "Project deleted."
                         st.rerun()
 
                 st.markdown("---")
                 st.caption("Edit below and click Save Project to update.")
                 project_form(existing=p)
+
 
 render()
