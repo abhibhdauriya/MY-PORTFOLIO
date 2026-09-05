@@ -62,6 +62,17 @@ def render():
         render_tags(", ".join([s["name"] for s in skills]))
         st.write("")
 
+
+    # Live Links (from admin Links Manager)
+    live_links = fetch_all("SELECT * FROM links WHERE is_active = 1 ORDER BY is_featured DESC, created_at DESC")
+    if live_links:
+        st.markdown('<div class="pf-section-label">Live Dashboards & Links</div>', unsafe_allow_html=True)
+        link_cols = st.columns(2)
+        for i, link in enumerate(live_links):
+            with link_cols[i % 2]:
+                label = f"{link.get('icon', '') or ''} {link['title']}".strip()
+                st.link_button(label, link["url"], use_container_width=True)
+        st.write("")
     # Experience preview
     experience = fetch_all("SELECT * FROM experience ORDER BY sort_order LIMIT 2")
     if experience:
