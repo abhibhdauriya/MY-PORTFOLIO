@@ -1,7 +1,7 @@
 """
 Database connection and generic CRUD helpers.
-Uses a cached, reused connection (via st.cache_resource) instead of
-opening a new connection per query — much faster for a remote DB.
+Uses Turso's embedded-replica mode: a local synced copy for fast reads,
+with writes pushed to the remote Turso DB via periodic sync.
 """
 
 import sqlite3
@@ -15,7 +15,9 @@ try:
 except ImportError:
     _HAS_ST = False
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "portfolio.db")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(BASE_DIR, "portfolio.db")
+REPLICA_PATH = os.path.join(BASE_DIR, "local_replica.db")
 
 
 def _get_turso_creds():
@@ -33,7 +35,9 @@ def _build_conn():
     url, token = _get_turso_creds()
     if url and token:
         import libsql
-        return libsql.connect(database=url, auth_token=token)
+        conn = libsql.connect(REPLICA_PATH, sync_url=url, auth_token=token)
+        conn.sync()
+        return conn
     else:
         return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -47,12 +51,13 @@ else:
 
 @contextmanager
 def get_conn():
-    """Reuses one persistent connection instead of opening a new one every call."""
     conn = _cached_conn()
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
+        if hasattr(conn, "sync"):
+            conn.sync()
     except Exception:
         conn.rollback()
         raise
