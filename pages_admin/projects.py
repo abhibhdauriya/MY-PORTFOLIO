@@ -72,6 +72,14 @@ def project_form(existing: dict | None = None):
             uses_power_pivot = st.checkbox("Power Pivot", value=bool(existing.get("uses_power_pivot")) if existing else False)
 
         st.markdown("##### Files")
+        if is_edit:
+            st.caption(
+                f"Current files — "
+                f"Thumbnail: {'✅' if existing.get('thumbnail_path') else '❌ none'} | "
+                f"XLSX: {'✅' if existing.get('sample_xlsx_path') else '❌ none'} | "
+                f"XLSM: {'✅' if existing.get('sample_xlsm_path') else '❌ none'} | "
+                f"PDF: {'✅' if existing.get('pdf_doc_path') else '❌ none'}"
+            )
         thumbnail = st.file_uploader("Thumbnail (PNG/JPG/WEBP)", type=["png", "jpg", "jpeg", "webp"], key=f"thumb_{key_prefix}")
         screenshots = st.file_uploader("Screenshots (multiple allowed)", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True, key=f"shots_{key_prefix}")
         sample_xlsx = st.file_uploader("Sample .xlsx (sanitized demo only)", type=["xlsx"], key=f"xlsx_{key_prefix}")
@@ -109,33 +117,51 @@ def project_form(existing: dict | None = None):
                 "uses_power_pivot": int(uses_power_pivot),
             }
 
+            upload_warnings = []
+
             if thumbnail:
                 path = save_uploaded_file(thumbnail, "projects")
                 if path:
                     data["thumbnail_path"] = path
+                else:
+                    upload_warnings.append(f"Thumbnail '{thumbnail.name}' was rejected (check file type/size).")
             if screenshots:
                 paths = [save_uploaded_file(f, "screenshots") for f in screenshots]
-                data["screenshots"] = ", ".join([p for p in paths if p])
+                good_paths = [p for p in paths if p]
+                if good_paths:
+                    data["screenshots"] = ", ".join(good_paths)
+                if len(good_paths) < len(screenshots):
+                    upload_warnings.append("One or more screenshots were rejected (check file type/size).")
             if sample_xlsx:
                 path = save_uploaded_file(sample_xlsx, "projects")
                 if path:
                     data["sample_xlsx_path"] = path
+                else:
+                    upload_warnings.append(f"'{sample_xlsx.name}' (.xlsx) was rejected — check file type/size in validators.py.")
             if sample_xlsm:
                 path = save_uploaded_file(sample_xlsm, "projects")
                 if path:
                     data["sample_xlsm_path"] = path
+                else:
+                    upload_warnings.append(f"'{sample_xlsm.name}' (.xlsm) was rejected — check file type/size in validators.py.")
             if pdf_doc:
                 path = save_uploaded_file(pdf_doc, "projects")
                 if path:
                     data["pdf_doc_path"] = path
+                else:
+                    upload_warnings.append(f"'{pdf_doc.name}' (.pdf) was rejected — check file type/size in validators.py.")
 
             with st.spinner("Saving..."):
                 if is_edit:
                     update_row("projects", existing["id"], data)
-                    st.session_state["_project_flash"] = "Project updated successfully."
+                    flash = "Project updated successfully."
                 else:
                     insert_row("projects", data)
-                    st.session_state["_project_flash"] = "Project created successfully."
+                    flash = "Project created successfully."
+
+            if upload_warnings:
+                flash += " ⚠️ But: " + " | ".join(upload_warnings)
+            st.session_state["_project_flash"] = flash
             st.rerun()
 
 
