@@ -1,8 +1,7 @@
 """
 Database connection and generic CRUD helpers.
-All queries are parameterized. No string-formatted SQL anywhere.
-Uses Turso (cloud) when TURSO_DATABASE_URL/TURSO_AUTH_TOKEN are set in
-st.secrets; otherwise falls back to a local SQLite file (portfolio.db).
+Uses a cached, reused connection (via st.cache_resource) instead of
+opening a new connection per query — much faster for a remote DB.
 """
 
 import sqlite3
@@ -20,7 +19,6 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 def _get_turso_creds():
-    """Return (url, token) from st.secrets if configured, else (None, None)."""
     if not _HAS_ST:
         return None, None
     try:
@@ -31,15 +29,26 @@ def _get_turso_creds():
         return None, None
 
 
-@contextmanager
-def get_conn():
-    """Context-managed connection: Turso cloud DB if configured, else local SQLite."""
+def _build_conn():
     url, token = _get_turso_creds()
     if url and token:
         import libsql
-        conn = libsql.connect(database=url, auth_token=token)
+        return libsql.connect(database=url, auth_token=token)
     else:
-        conn = sqlite3.connect(DB_PATH)
+        return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+
+if _HAS_ST:
+    _cached_conn = st.cache_resource(_build_conn)
+else:
+    def _cached_conn():
+        return _build_conn()
+
+
+@contextmanager
+def get_conn():
+    """Reuses one persistent connection instead of opening a new one every call."""
+    conn = _cached_conn()
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
@@ -47,12 +56,9 @@ def get_conn():
     except Exception:
         conn.rollback()
         raise
-    finally:
-        conn.close()
 
 
 def _rows_to_dicts(cur, rows):
-    """Convert raw cursor rows to list of dicts using cursor.description."""
     if not cur.description:
         return []
     cols = [d[0] for d in cur.description]
@@ -60,7 +66,6 @@ def _rows_to_dicts(cur, rows):
 
 
 def init_db():
-    """Create all tables if they do not exist, and seed singleton rows."""
     with get_conn() as conn:
         statements = [s.strip() for s in SCHEMA_SQL.split(";") if s.strip()]
         for stmt in statements:
@@ -90,14 +95,12 @@ def fetch_one(query: str, params: tuple = ()):
 
 
 def execute(query: str, params: tuple = ()):
-    """For INSERT/UPDATE/DELETE. Returns lastrowid."""
     with get_conn() as conn:
         cur = conn.execute(query, params)
         return cur.lastrowid
 
 
 def insert_row(table: str, data: dict) -> int:
-    """Generic insert helper. `data` keys must match column names exactly."""
     columns = ", ".join(data.keys())
     placeholders = ", ".join(["?"] * len(data))
     query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
@@ -105,7 +108,6 @@ def insert_row(table: str, data: dict) -> int:
 
 
 def update_row(table: str, row_id: int, data: dict):
-    """Generic update helper for a single-PK-id table."""
     set_clause = ", ".join([f"{k} = ?" for k in data.keys()])
     query = f"UPDATE {table} SET {set_clause} WHERE id = ?"
     execute(query, tuple(data.values()) + (row_id,))
