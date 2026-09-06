@@ -1,8 +1,10 @@
 """
 Database connection and generic CRUD helpers.
-Uses Turso's embedded-replica mode: a local synced copy for fast reads,
-with writes pushed to the remote Turso DB via periodic sync. Falls back
-to a plain local SQLite file if Turso secrets aren't configured.
+
+TURSO_ENABLED controls whether the cloud database (Turso) is used.
+Set to True once Turso connectivity is confirmed stable; until then,
+it stays False so the site runs reliably on local SQLite (data will
+NOT persist across app restarts on Streamlit Cloud while this is off).
 """
 
 import sqlite3
@@ -15,6 +17,8 @@ try:
     _HAS_ST = True
 except ImportError:
     _HAS_ST = False
+
+TURSO_ENABLED = False  # <-- flip to True later once Turso is confirmed working
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "portfolio.db")
@@ -33,14 +37,19 @@ def _get_turso_creds():
 
 
 def _build_conn():
-    url, token = _get_turso_creds()
-    if url and token:
-        import libsql
-        conn = libsql.connect(REPLICA_PATH, sync_url=url, auth_token=token)
-        conn.sync()
-        return conn
-    else:
-        return sqlite3.connect(DB_PATH, check_same_thread=False)
+    if TURSO_ENABLED:
+        url, token = _get_turso_creds()
+        if url and token:
+            try:
+                import libsql
+                conn = libsql.connect(REPLICA_PATH, sync_url=url, auth_token=token)
+                conn.sync()
+                return conn
+            except Exception as e:
+                if _HAS_ST:
+                    st.warning(f"Cloud database unavailable, using local storage. ({e})")
+                return sqlite3.connect(DB_PATH, check_same_thread=False)
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
 if _HAS_ST:
@@ -58,7 +67,10 @@ def get_conn():
         yield conn
         conn.commit()
         if hasattr(conn, "sync"):
-            conn.sync()
+            try:
+                conn.sync()
+            except Exception:
+                pass
     except Exception:
         conn.rollback()
         raise
