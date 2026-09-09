@@ -1,135 +1,91 @@
 """
-Database connection and generic CRUD helpers.
+Abhishek Singh — Portfolio CMS
+Entry point. Sets up the DB, injects styles, and wires navigation.
 
-TURSO_ENABLED controls whether the cloud database (Turso) is used.
-Set to True once Turso connectivity is confirmed stable; until then,
-it stays False so the site runs reliably on local SQLite (data will
-NOT persist across app restarts on Streamlit Cloud while this is off).
+Run locally:  streamlit run app.py
 """
 
-import sqlite3
-import os
-from contextlib import contextmanager
-from database.schema import SCHEMA_SQL
+import streamlit as st
+
+st.set_page_config(
+    page_title="Abhishek Singh | Portfolio",
+    page_icon="🧭",
+    layout="centered",
+    initial_sidebar_state="expanded",
+)
+
+st.write("✅ Checkpoint 1: page_config done")
+
+from database.db import init_db, fetch_one
+st.write("✅ Checkpoint 2: db module imported")
+
+init_db()
+st.write("✅ Checkpoint 3: init_db done")
+
+from utils.file_manager import ensure_upload_dirs
+ensure_upload_dirs()
+st.write("✅ Checkpoint 4: upload dirs ready")
+
+from auth.authentication import bootstrap_admin_from_secrets, is_logged_in
+bootstrap_admin_from_secrets()
+st.write("✅ Checkpoint 5: admin bootstrap done")
+
+from components.styles import inject_custom_css, inject_seo_meta
+inject_custom_css()
+st.write("✅ Checkpoint 6: CSS injected")
+
+_settings = fetch_one("SELECT site_title, seo_description FROM site_settings WHERE id = 1") or {}
+st.write("✅ Checkpoint 7: settings fetched")
+
+inject_seo_meta(
+    description=_settings.get("seo_description") or "MIS, Excel Automation, Python & Data Analytics portfolio.",
+    site_title=_settings.get("site_title") or "Abhishek Singh | Portfolio",
+)
+st.write("✅ Checkpoint 8: SEO meta injected")
+
+# --- Navigation: file-based pages, so st.switch_page("pages_public/x.py") works ---
+public_pages = [
+    st.Page("pages_public/home.py", title="Home", icon="🏠", url_path="home", default=True),
+    st.Page("pages_public/about.py", title="About Me", icon="👤", url_path="about"),
+    st.Page("pages_public/skills.py", title="Skills", icon="🛠️", url_path="skills"),
+    st.Page("pages_public/experience.py", title="Experience", icon="💼", url_path="experience"),
+    st.Page("pages_public/projects.py", title="Projects", icon="📁", url_path="projects"),
+    st.Page("pages_public/excel.py", title="Excel & VBA Automation", icon="📊", url_path="excel"),
+    st.Page("pages_public/web_apps.py", title="Web Applications", icon="🌐", url_path="web-apps"),
+    st.Page("pages_public/resume.py", title="Resume", icon="📄", url_path="resume"),
+    st.Page("pages_public/certificates.py", title="Certificates", icon="🎓", url_path="certificates"),
+    st.Page("pages_public/contact.py", title="Contact", icon="✉️", url_path="contact"),
+]
+st.write("✅ Checkpoint 9: public pages list built")
+
+if is_logged_in():
+    admin_nav_pages = [
+        st.Page("pages_admin/dashboard.py", title="Dashboard", icon="📈", url_path="admin-dashboard"),
+        st.Page("pages_admin/profile.py", title="Profile", icon="👤", url_path="admin-profile"),
+        st.Page("pages_admin/projects.py", title="Projects", icon="📁", url_path="admin-projects"),
+        st.Page("pages_admin/skills.py", title="Skills", icon="🛠️", url_path="admin-skills"),
+        st.Page("pages_admin/experience.py", title="Experience", icon="💼", url_path="admin-experience"),
+        st.Page("pages_admin/certificates.py", title="Certificates", icon="🎓", url_path="admin-certificates"),
+        st.Page("pages_admin/links.py", title="Links", icon="🔗", url_path="admin-links"),
+        st.Page("pages_admin/messages.py", title="Messages", icon="📬", url_path="admin-messages"),
+        st.Page("pages_admin/settings.py", title="Site Settings", icon="⚙️", url_path="admin-settings"),
+        st.Page("pages_admin/backup.py", title="Database Backup", icon="💾", url_path="admin-backup"),
+    ]
+    nav_structure = {"Portfolio": public_pages, "Admin": admin_nav_pages}
+else:
+    admin_auth_pages = [
+        st.Page("pages_public/admin_login.py", title="Admin Login", icon="🔐", url_path="admin-login"),
+    ]
+    nav_structure = {"Portfolio": public_pages, "Admin": admin_auth_pages}
+
+st.write("✅ Checkpoint 10: nav structure built, about to call st.navigation")
+
+pg = st.navigation(nav_structure)
+st.write("✅ Checkpoint 11: navigation object created, about to run page")
 
 try:
-    import streamlit as st
-    _HAS_ST = True
-except ImportError:
-    _HAS_ST = False
-
-TURSO_ENABLED = False  # <-- flip to True later once Turso is confirmed working
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, "portfolio.db")
-REPLICA_PATH = os.path.join(BASE_DIR, "local_replica.db")
-
-
-def _get_turso_creds():
-    if not _HAS_ST:
-        return None, None
-    try:
-        url = st.secrets.get("TURSO_DATABASE_URL")
-        token = st.secrets.get("TURSO_AUTH_TOKEN")
-        return url, token
-    except Exception:
-        return None, None
-
-
-def _build_conn():
-    if TURSO_ENABLED:
-        url, token = _get_turso_creds()
-        if url and token:
-            try:
-                import libsql
-                conn = libsql.connect(REPLICA_PATH, sync_url=url, auth_token=token)
-                conn.sync()
-                return conn
-            except Exception as e:
-                if _HAS_ST:
-                    st.warning(f"Cloud database unavailable, using local storage. ({e})")
-                return sqlite3.connect(DB_PATH, check_same_thread=False)
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-
-if _HAS_ST:
-    _cached_conn = st.cache_resource(_build_conn)
-else:
-    def _cached_conn():
-        return _build_conn()
-
-
-@contextmanager
-def get_conn():
-    conn = _cached_conn()
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-        if hasattr(conn, "sync"):
-            try:
-                conn.sync()
-            except Exception:
-                pass
-    except Exception:
-        conn.rollback()
-        raise
-
-
-def _rows_to_dicts(cur, rows):
-    if not cur.description:
-        return []
-    cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in rows]
-
-
-def init_db():
-    with get_conn() as conn:
-        statements = [s.strip() for s in SCHEMA_SQL.split(";") if s.strip()]
-        for stmt in statements:
-            conn.execute(stmt)
-        conn.execute(
-            "INSERT OR IGNORE INTO profile (id, name, headline) VALUES (1, ?, ?)",
-            ("Abhishek Singh", "MIS & Automation | Excel | Python | Data Analytics | Web Development"),
-        )
-        conn.execute("INSERT OR IGNORE INTO site_settings (id) VALUES (1)")
-
-
-def fetch_all(query: str, params: tuple = ()):
-    with get_conn() as conn:
-        cur = conn.execute(query, params)
-        rows = cur.fetchall()
-        return _rows_to_dicts(cur, rows)
-
-
-def fetch_one(query: str, params: tuple = ()):
-    with get_conn() as conn:
-        cur = conn.execute(query, params)
-        row = cur.fetchone()
-        if row is None:
-            return None
-        cols = [d[0] for d in cur.description] if cur.description else []
-        return dict(zip(cols, row))
-
-
-def execute(query: str, params: tuple = ()):
-    with get_conn() as conn:
-        cur = conn.execute(query, params)
-        return cur.lastrowid
-
-
-def insert_row(table: str, data: dict) -> int:
-    columns = ", ".join(data.keys())
-    placeholders = ", ".join(["?"] * len(data))
-    query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
-    return execute(query, tuple(data.values()))
-
-
-def update_row(table: str, row_id: int, data: dict):
-    set_clause = ", ".join([f"{k} = ?" for k in data.keys()])
-    query = f"UPDATE {table} SET {set_clause} WHERE id = ?"
-    execute(query, tuple(data.values()) + (row_id,))
-
-
-def delete_row(table: str, row_id: int):
-    execute(f"DELETE FROM {table} WHERE id = ?", (row_id,))
+    pg.run()
+    st.write("✅ Checkpoint 12: page ran successfully")
+except Exception as e:
+    st.error(f"Something went wrong: {e}")
+    raise
